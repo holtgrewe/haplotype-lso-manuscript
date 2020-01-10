@@ -1,0 +1,119 @@
+import random
+
+# Definition of available input sequences.
+INPUT_SEQS = (
+#    ("A", "16S-23S"),
+    ("A", "16S"),
+#    ("A", "50S"),
+#    ("B", "16S-23S"),
+#    ("B", "16S"),
+#    ("B", "50S"),
+#    ("C", "16S-23S"),
+#    ("C", "16S"),
+#    ("C", "50S"),
+#    ("D", "16S-23S"),
+#    ("D", "16S"),
+#    ("D", "50S"),
+#    ("E", "16S-23S"),
+#    ("E", "16S"),
+#    ("E", "50S"),
+)
+
+# Error rates to generate for.
+ERROR_RATES = [5, 10, 15, 20, 25, 30, 35, 40, 45, 50]
+
+# Number of replicates to create.
+NUM_REPLICATES = 1000
+
+
+def read_fasta(path):
+    """Read first sequence from FASTA."""
+    name = None
+    seq_parts = []
+    with open(path, "rt") as inputf:
+        for line in inputf:
+            line = line.strip()
+            if not line:
+                continue  # skip empty line
+            if name:
+                if seq_parts:
+                    break  # second seq_partsuence
+                else:
+                    if line.startswith(">"):
+                        raise Exception("Unexpected header") 
+                    else:
+                        seq_parts.append(line)
+            else:
+                if not line.startswith(">"):
+                    raise Exception("Expecting header")
+                else:
+                    name = line[1:]
+    import sys; print("Read %s - %s" % (name, "".join(seq_parts)))
+    return name, "".join(seq_parts)
+
+
+SHIFT = {
+    ('A', 0): 'C',
+    ('A', 1): 'G',
+    ('A', 2): 'T',
+    ('C', 0): 'A',
+    ('C', 1): 'G',
+    ('C', 2): 'T',
+    ('G', 0): 'A',
+    ('G', 1): 'C',
+    ('G', 2): 'T',
+    ('T', 0): 'A',
+    ('T', 1): 'C',
+    ('T', 2): 'G',
+}
+
+
+def mutate_one(c, shift):
+    return SHIFT[(c.upper(), shift % 3)]
+
+
+def run_mutate(path_input, path_output, erate, seed):
+    """Add SNVs to path_input and write to path_output"""
+    import sys; print("run_mutate({}, {}, {}, {})".format(path_input, path_output, erate, seed), file=sys.stderr)
+    erate = erate / 100.0
+    name, seq = read_fasta(path_input)
+    name = "%s MUTATED(%s, %s)" % (name, erate, seed)
+    num_errors = round(len(seq) * erate)
+    rnd = random.Random(seed)
+    positions = rnd.choices(list(range(len(seq))), k=num_errors)
+    shifts = [rnd.choice(list(range(3))) for i in range(num_errors)]
+    chars = list(seq)
+    for i, pos in enumerate(positions):
+        chars[pos] = mutate_one(chars[pos], shifts[i])
+    with open(path_output, "wt") as outputf:
+        print(">%s\n%s" % (name, "".join(chars)), file=outputf)
+
+
+rule default:
+    input: "result.xlsx"
+
+
+rule mutate:
+    output: "mutated/{haplotype}_{region}_{erate}_{repl}.fasta"
+    input: "input/{haplotype}_{region}.fasta"
+    run: run_mutate(str(input), str(output), int(wildcards.erate) / 10, int(wildcards.repl))
+
+
+def run_hlso_input():
+    return [
+        "mutated/{haplotype}_{region}_{erate}_{repl}.fasta".format(
+            haplotype=haplotype,
+            region=region,
+            repl=repl,
+            erate=erate,
+        )
+        for haplotype, region in INPUT_SEQS
+        for repl in range(NUM_REPLICATES)
+        for erate in ERROR_RATES
+    ]
+
+
+rule run_hlso:
+    output: "result.xlsx"
+    input: run_hlso_input()
+    shell: r"hlso cli --sample-name-from-file -o {output} {input}"
